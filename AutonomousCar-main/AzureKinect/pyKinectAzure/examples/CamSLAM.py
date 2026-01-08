@@ -33,7 +33,38 @@ class SLAM():
 
         self.prev_rgbd = rgbd
         return self.pose
+    
 
+    def make_tsdf_volume(self, voxel_length, sdf_trunc):
+        return o3d.pipelines.integration.ScalableTSDFVolume(
+            voxel_length=voxel_length,
+            sdf_trunc=sdf_trunc,
+            color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
+        )
+
+
+
+    def make_o3d_rgbd(self, color, depth):
+        # ---- Fix 1: convert BGR→RGB properly ----
+        color_rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+        color_rgb = np.ascontiguousarray(color_rgb)
+
+        # ---- Fix 2: make depth contiguous ----
+        depth = np.ascontiguousarray(depth)
+
+        # ---- Convert to Open3D Images ----
+        color_o3d = o3d.geometry.Image(color_rgb)
+        depth_o3d = o3d.geometry.Image(depth)
+
+        # ---- Create RGBD image ----
+        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            color_o3d,
+            depth_o3d,
+            depth_scale=1000.0,       # Kinect depth is in millimeters
+            depth_trunc=4.0,          # max range
+            convert_rgb_to_intensity=False
+        )
+        return rgbd
 
     def run(self):
         # -----------------------
@@ -100,17 +131,11 @@ class SLAM():
         # We'll set width/height dynamically once first depth frame is read.
         camera_intrinsic = None
 
-        # -----------------------
         # TSDF volume (live)
-        # -----------------------
-        def make_tsdf_volume(voxel_length=TSDF_VOXEL_LENGTH, sdf_trunc=TSDF_SDF_TRUNC):
-            return o3d.pipelines.integration.ScalableTSDFVolume(
-                voxel_length=voxel_length,
-                sdf_trunc=sdf_trunc,
-                color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
-            )
+     
+ 
 
-        tsdf_volume = make_tsdf_volume()
+        tsdf_volume = self.make_tsdf_volume(TSDF_VOXEL_LENGTH, TSDF_SDF_TRUNC)
 
         # -----------------------
         # Pose graph for keyframes
@@ -126,27 +151,7 @@ class SLAM():
         frames = []     # list of dicts: { 'rgbd', 'timestamp' }
 
         # utility: create Open3D RGBD image from color+depth numpy arrays
-        def make_o3d_rgbd(color, depth):
-            # ---- Fix 1: convert BGR→RGB properly ----
-            color_rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
-            color_rgb = np.ascontiguousarray(color_rgb)
 
-            # ---- Fix 2: make depth contiguous ----
-            depth = np.ascontiguousarray(depth)
-
-            # ---- Convert to Open3D Images ----
-            color_o3d = o3d.geometry.Image(color_rgb)
-            depth_o3d = o3d.geometry.Image(depth)
-
-            # ---- Create RGBD image ----
-            rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                color_o3d,
-                depth_o3d,
-                depth_scale=1000.0,       # Kinect depth is in millimeters
-                depth_trunc=4.0,          # max range
-                convert_rgb_to_intensity=False
-            )
-            return rgbd
 
 
         # incremental odometry state
@@ -208,7 +213,7 @@ class SLAM():
                     print("Set camera_intrinsic:", w, h, fx, fy, cx, cy)
 
                 # create rgbd
-                rgbd = make_o3d_rgbd(aligned_color, depth)
+                rgbd = self.make_o3d_rgbd(aligned_color, depth)
 
                 # save frame (for later re-integration if needed)
                 frames.append({'rgbd': rgbd, 'timestamp': time.time(), 'index': frame_idx, 'color': aligned_color.copy(), 'depth': depth.copy()})
@@ -299,7 +304,7 @@ class SLAM():
                         print("Pose graph optimized. Rebuilding TSDF from keyframes with optimized poses...")
 
                         # rebuild TSDF from keyframes (to remove drift)
-                        tsdf_volume = make_tsdf_volume()  # fresh
+                        tsdf_volume = self.make_tsdf_volume()  # fresh
                         # integrate every keyframe using optimized node poses
                         for node_id, kf in enumerate(keyframes):
                             node_pose = np.linalg.inv(pose_graph.nodes[node_id].pose)  # node.pose is camera->world?
