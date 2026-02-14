@@ -170,6 +170,7 @@ class SLAM():
 
         try:
             while True:
+                
                 capture = device.update()
                 # acquire frames
                 ok_color, color = capture.get_color_image()
@@ -207,27 +208,41 @@ class SLAM():
                     aligned_color = cv2.resize(color, (depth.shape[1], depth.shape[0]), interpolation=cv2.INTER_LINEAR)
 
                 # prepare Open3D intrinsics once
+
+                
                 if camera_intrinsic is None:
                     h, w = depth.shape
+                    # check if it need to check more then once
                     camera_intrinsic = o3d.camera.PinholeCameraIntrinsic(width=w, height=h, fx=fx, fy=fy, cx=cx, cy=cy)
                     print("Set camera_intrinsic:", w, h, fx, fy, cx, cy)
+                
+                
 
                 # create rgbd
                 rgbd = self.make_o3d_rgbd(aligned_color, depth)
-
+                
+                 
                 # save frame (for later re-integration if needed)
                 frames.append({'rgbd': rgbd, 'timestamp': time.time(), 'index': frame_idx, 'color': aligned_color.copy(), 'depth': depth.copy()})
-
+                
                 # frame-to-frame odometry (estimate transform T_curr_from_prev)
                 success = False
                 if prev_rgbd is None:
                     T_curr_from_prev = np.eye(4)
                     success = True
                 else:
+                    
                     option = o3d.pipelines.odometry.OdometryOption()
+                    option.iteration_number_per_pyramid_level[0] = 10
+                    option.iteration_number_per_pyramid_level[1] = 5
+                    option.iteration_number_per_pyramid_level[2] = 1
+                    print(f'option check: {option}')
                     odo_method = o3d.pipelines.odometry.RGBDOdometryJacobianFromHybridTerm()
-                    success, T_curr_from_prev, info = o3d.pipelines.odometry.compute_rgbd_odometry(
+                    print(f'time check 1.3: {time.time()}')
+                    success, T_curr_from_prev, info = o3d.pipelines.odometry.compute_rgbd_odometry( # function call is slow
                         rgbd, prev_rgbd, camera_intrinsic, np.identity(4), odo_method, option)
+
+                print(f'time check 2: {time.time()}')
 
                 if not success:
                     # if odometry failed, we keep previous pose (could try feature-based fallback)
@@ -256,6 +271,8 @@ class SLAM():
                     vis.update_renderer()
 
                 # Keyframe handling
+               
+
                 now = time.time()
                 if (frame_idx % KEYFRAME_EVERY_N == 0) and (now - last_keyframe_time > KEYFRAME_MIN_TIME):
                     # add keyframe to list with current estimated pose
@@ -304,7 +321,7 @@ class SLAM():
                         print("Pose graph optimized. Rebuilding TSDF from keyframes with optimized poses...")
 
                         # rebuild TSDF from keyframes (to remove drift)
-                        tsdf_volume = self.make_tsdf_volume()  # fresh
+                        tsdf_volume = self.make_tsdf_volume(TSDF_VOXEL_LENGTH, TSDF_SDF_TRUNC)  # fresh
                         # integrate every keyframe using optimized node poses
                         for node_id, kf in enumerate(keyframes):
                             node_pose = np.linalg.inv(pose_graph.nodes[node_id].pose)  # node.pose is camera->world?
